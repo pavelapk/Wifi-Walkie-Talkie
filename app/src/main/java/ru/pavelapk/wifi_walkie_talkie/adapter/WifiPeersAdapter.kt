@@ -9,7 +9,7 @@ import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import ru.pavelapk.wifi_walkie_talkie.R
 import ru.pavelapk.wifi_walkie_talkie.databinding.ItemPeerBinding
-import ru.pavelapk.wifi_walkie_talkie.utils.WifiP2pDeviceUtils.statusToString
+import ru.pavelapk.wifi_walkie_talkie.utils.WifiP2pUtils.statusToString
 
 class WifiPeersAdapter(
     private val listener: WifiPeersListener

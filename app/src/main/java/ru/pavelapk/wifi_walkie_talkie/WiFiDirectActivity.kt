@@ -16,11 +16,20 @@ import android.provider.Settings
 import android.util.Log
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.isVisible
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.*
 import ru.pavelapk.wifi_walkie_talkie.adapter.WifiPeersAdapter
 import ru.pavelapk.wifi_walkie_talkie.databinding.ActivityMainBinding
-import ru.pavelapk.wifi_walkie_talkie.utils.WifiP2pDeviceUtils.statusToString
+import ru.pavelapk.wifi_walkie_talkie.utils.WifiP2pUtils.errorToString
+import ru.pavelapk.wifi_walkie_talkie.utils.WifiP2pUtils.statusToString
 import ru.pavelapk.wifi_walkie_talkie.utils.toast
 import ru.pavelapk.wifi_walkie_talkie.utils.toastLong
+import java.io.IOException
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.net.InetSocketAddress
 
 class WiFiDirectActivity : AppCompatActivity(), WifiP2pManager.ChannelListener {
     private lateinit var binding: ActivityMainBinding
@@ -29,9 +38,6 @@ class WiFiDirectActivity : AppCompatActivity(), WifiP2pManager.ChannelListener {
         set(value) {
             field = value
             binding.tvP2pStatus.text = "WifiP2P: $field"
-            if (!field) {
-                updatePeerList(listOf())
-            }
         }
     private var retryChannel = false
     private val intentFilter = IntentFilter()
@@ -41,22 +47,27 @@ class WiFiDirectActivity : AppCompatActivity(), WifiP2pManager.ChannelListener {
     private lateinit var manager: WifiP2pManager
     private lateinit var wifiManager: WifiManager
 
+    private var thisDevice: WifiP2pDevice? = null
+
     private val wifiPeersAdapter = WifiPeersAdapter { device ->
         connect(device)
     }
 
-    private val locationPermissionRequest = registerForActivityResult(
+    private val permissionRequest = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         when {
-            permissions.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false) -> {
+            permissions.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false)
+                    &&
+                    permissions.getOrDefault(Manifest.permission.RECORD_AUDIO, false)
+            -> {
                 discover()
             }
             permissions.getOrDefault(Manifest.permission.ACCESS_COARSE_LOCATION, false) -> {
                 toastLong("Для работы программы нужно разрешение на определения ТОЧНОГО местоположения")
             }
             else -> {
-                toastLong("Для работы программы нужно разрешение на определения местоположения")
+                toastLong("Для работы программы нужно разрешение на определения местоположения и записи микрофона")
             }
         }
     }
@@ -85,12 +96,17 @@ class WiFiDirectActivity : AppCompatActivity(), WifiP2pManager.ChannelListener {
         binding.recyclerPeers.adapter = wifiPeersAdapter
 
         binding.btnStartDiscovery.setOnClickListener {
-            locationPermissionRequest.launch(
+            permissionRequest.launch(
                 arrayOf(
                     Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                    Manifest.permission.RECORD_AUDIO
                 )
             )
+        }
+
+        binding.btnCloseConnection.setOnClickListener {
+            cancelDisconnect()
         }
     }
 
@@ -105,7 +121,13 @@ class WiFiDirectActivity : AppCompatActivity(), WifiP2pManager.ChannelListener {
         unregisterReceiver(receiver)
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        cancelDisconnect()
+    }
+
     fun updateThisDevice(wifiP2pDevice: WifiP2pDevice) {
+        thisDevice = wifiP2pDevice
         with(binding) {
             tvName.text = "${wifiP2pDevice.deviceName} (${wifiP2pDevice.deviceAddress})"
             tvStatus.text =
@@ -115,6 +137,18 @@ class WiFiDirectActivity : AppCompatActivity(), WifiP2pManager.ChannelListener {
 
     fun updatePeerList(list: List<WifiP2pDevice>) {
         wifiPeersAdapter.submitList(list)
+    }
+
+    fun goToStart() {
+        updatePeerList(listOf())
+        binding.tvConnected.isVisible = false
+        binding.recyclerPeers.isVisible = true
+    }
+
+    private fun connected(address: String) {
+        binding.tvConnected.isVisible = true
+        binding.tvConnected.text = "connected to: $address"
+        binding.recyclerPeers.isVisible = false
     }
 
     private fun connect(device: WifiP2pDevice) {
@@ -131,9 +165,114 @@ class WiFiDirectActivity : AppCompatActivity(), WifiP2pManager.ChannelListener {
             }
 
             override fun onFailure(reason: Int) {
-                toast("Connect failed. Retry.")
+                toast("Connect failed: ${errorToString(reason)}, please retry")
             }
         })
+    }
+
+    private fun disconnect() {
+
+//        fragment.resetViews()
+        manager.removeGroup(channel, object : WifiP2pManager.ActionListener {
+            override fun onFailure(reasonCode: Int) {
+                Log.d(TAG, "Disconnect failed. Reason : ${errorToString(reasonCode)}")
+            }
+
+            override fun onSuccess() {
+//                fragment.getView().setVisibility(View.GONE)
+            }
+        })
+    }
+
+    private var connectionJob: Job? = null
+
+    fun startServer() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val server = DatagramSocket(PORT)
+                val buf = ByteArray(1)
+                val packet = DatagramPacket(buf, 1)
+                server.receive(packet)
+                val client = packet.socketAddress as InetSocketAddress
+                server.send(packet)
+                Log.i(TAG, "Client connected: $client")
+                withContext(Dispatchers.Main) {
+                    connected(client.toString())
+                }
+                connectionJob = launch {
+                    SocketHandler(server, client).run {
+                        toast(it)
+                    }
+                    coroutineContext.cancelChildren()
+                }
+            } catch (e: IOException) {
+                Log.e(TAG, "server socket error", e)
+                withContext(Dispatchers.Main) {
+                    toastLong("Ошибка при создании подключения")
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    goToStart()
+                }
+            }
+        }
+    }
+
+    fun startClient(serverAddress: InetAddress) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val client = DatagramSocket()
+                val server = InetSocketAddress(serverAddress, PORT)
+                var isPong = false
+                launch(Dispatchers.IO) {
+                    val buf = ByteArray(1)
+                    val packet = DatagramPacket(buf, 1)
+                    client.receive(packet)
+                    isPong = true
+                }
+                while (!isPong) {
+                    val buf = ByteArray(1)
+                    val packet = DatagramPacket(buf, 1, server)
+                    client.send(packet)
+                    delay(200)
+                }
+                Log.i(TAG, "Connected to server $server")
+                withContext(Dispatchers.Main) {
+                    connected(server.toString())
+                }
+                connectionJob = launch {
+                    SocketHandler(client, server).run {
+                        toast(it)
+                    }
+                    coroutineContext.cancelChildren()
+                }
+            } catch (e: IOException) {
+                Log.e(TAG, "client socket error", e)
+                withContext(Dispatchers.Main) {
+                    toastLong("Ошибка при подключении")
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    goToStart()
+                }
+            }
+        }
+    }
+
+    private fun cancelDisconnect() {
+        if (thisDevice?.status == WifiP2pDevice.CONNECTED) {
+            disconnect()
+        } else if (thisDevice?.status == WifiP2pDevice.AVAILABLE || thisDevice?.status == WifiP2pDevice.INVITED) {
+            manager.cancelConnect(channel, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    toast("Aborting connection")
+                }
+
+                override fun onFailure(reasonCode: Int) {
+                    toastLong("Connect abort request failed. Reason: ${errorToString(reasonCode)}")
+                }
+            })
+        }
     }
 
     private fun discover() {
@@ -154,13 +293,7 @@ class WiFiDirectActivity : AppCompatActivity(), WifiP2pManager.ChannelListener {
             }
 
             override fun onFailure(reasonCode: Int) {
-                val error = when (reasonCode) {
-                    WifiP2pManager.P2P_UNSUPPORTED -> "P2P_UNSUPPORTED"
-                    WifiP2pManager.ERROR -> "ERROR"
-                    WifiP2pManager.BUSY -> "BUSY"
-                    else -> reasonCode.toString()
-                }
-                toastLong("Discovery Failed : $error")
+                toastLong("Discovery Failed : ${errorToString(reasonCode)}")
             }
         })
     }
@@ -207,10 +340,12 @@ class WiFiDirectActivity : AppCompatActivity(), WifiP2pManager.ChannelListener {
             manager.initialize(this, mainLooper, this)
         } else {
             toastLong("Severe! Channel is probably lost premanently. Try Disable/Re-Enable P2P.")
+            goToStart()
         }
     }
 
     companion object {
         val TAG: String = this::class.java.simpleName
+        const val PORT = 1337
     }
 }

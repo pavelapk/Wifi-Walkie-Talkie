@@ -27,20 +27,16 @@ class WiFiDirectBroadcastReceiver(
     }
 
     private val connectionListener = WifiP2pManager.ConnectionInfoListener { info ->
-        val groupOwnerAddress = info.groupOwnerAddress.hostAddress
+        val groupOwnerAddress = info.groupOwnerAddress
 
-        activity.toast("i am owner? ${info.isGroupOwner}, owner: $groupOwnerAddress")
+        activity.toast("i am owner? ${info.isGroupOwner}, owner: ${groupOwnerAddress.hostAddress}")
 
         // After the group negotiation, we can determine the group owner
         // (server).
         if (info.groupFormed && info.isGroupOwner) {
-            // Do whatever tasks are specific to the group owner.
-            // One common case is creating a group owner thread and accepting
-            // incoming connections.
+            activity.startServer()
         } else if (info.groupFormed) {
-            // The other device acts as the peer (client). In this case,
-            // you'll want to create a peer thread that connects
-            // to the group owner.
+            activity.startClient(groupOwnerAddress)
         }
     }
 
@@ -48,24 +44,24 @@ class WiFiDirectBroadcastReceiver(
         when (intent.action) {
             WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION -> {
                 val state = intent.getIntExtra(WifiP2pManager.EXTRA_WIFI_STATE, -1)
-                activity.isWifiP2pEnabled = state == WifiP2pManager.WIFI_P2P_STATE_ENABLED
+                activity.isWifiP2pEnabled = (state == WifiP2pManager.WIFI_P2P_STATE_ENABLED).also {
+                    if (!it) activity.goToStart()
+                }
+
             }
             WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> {
                 manager.requestPeers(channel, peerListListener)
                 Log.d(TAG, "P2P peers changed")
             }
             WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> {
-
                 val networkInfo =
                     intent.getParcelableExtra<Parcelable>(WifiP2pManager.EXTRA_NETWORK_INFO) as? NetworkInfo?
 
                 if (networkInfo?.isConnected == true) {
                     manager.requestConnectionInfo(channel, connectionListener)
                 } else {
-                    // It's a disconnect
-                    activity.updatePeerList(listOf())
+                    activity.goToStart()
                 }
-
             }
             WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION -> {
                 (intent.getParcelableExtra(WifiP2pManager.EXTRA_WIFI_P2P_DEVICE) as? WifiP2pDevice)?.let {

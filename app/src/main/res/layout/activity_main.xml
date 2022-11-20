@@ -6,6 +6,18 @@
     android:layout_height="match_parent"
     tools:context=".WiFiDirectActivity">
 
+    <Button
+        android:id="@+id/btnCloseConnection"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:layout_marginTop="8dp"
+        android:paddingVertical="0dp"
+        android:text="Close connection"
+        android:textAllCaps="false"
+        app:layout_constraintStart_toEndOf="@+id/btnStartDiscovery"
+        app:layout_constraintTop_toBottomOf="@+id/tvStatus" />
+
     <TextView
         android:id="@+id/textView"
         android:layout_width="wrap_content"
@@ -42,6 +54,7 @@
         android:layout_height="0dp"
         android:layout_marginTop="8dp"
         android:orientation="vertical"
+        android:visibility="visible"
         app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
@@ -70,5 +83,17 @@
         android:textAllCaps="false"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/tvP2pStatus" />
+
+    <TextView
+        android:id="@+id/tvConnected"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="32dp"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/btnCloseConnection"
+        tools:text="connected"
+        tools:visibility="visible" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>
