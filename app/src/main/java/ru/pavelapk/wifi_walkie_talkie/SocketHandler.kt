@@ -1,5 +1,6 @@
 package ru.pavelapk.wifi_walkie_talkie
 
+import android.annotation.SuppressLint
 import android.media.*
 import android.util.Log
 import kotlinx.coroutines.*
@@ -10,7 +11,39 @@ import java.net.InetSocketAddress
 class SocketHandler(private val socket: DatagramSocket, private val to: InetSocketAddress) {
     private var running: Boolean = false
 
-    suspend fun run(messageListener: (msg: String) -> Unit) = withContext(Dispatchers.IO) {
+    var isPush: Boolean = false
+
+
+    @SuppressLint("MissingPermission")
+    private val audioRecorder = AudioRecord(
+        MediaRecorder.AudioSource.VOICE_COMMUNICATION, SAMPLE_RATE,
+        AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
+        AudioRecord.getMinBufferSize(
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        ) * 10
+    )
+
+    private val track = AudioTrack.Builder()
+        .setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+        )
+        .setAudioFormat(
+            AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(SAMPLE_RATE)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .build()
+        )
+        .setBufferSizeInBytes(BUF_SIZE)
+        .setTransferMode(AudioTrack.MODE_STREAM)
+        .build()
+
+    suspend fun run() = withContext(Dispatchers.IO) {
         running = true
 
         val tasks = listOf(
@@ -21,23 +54,20 @@ class SocketHandler(private val socket: DatagramSocket, private val to: InetSock
     }
 
     private suspend fun recorder() = withContext(Dispatchers.IO) {
-        val audioRecorder = try {
-            AudioRecord(
-                MediaRecorder.AudioSource.VOICE_COMMUNICATION, SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                AudioRecord.getMinBufferSize(
-                    SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT
-                ) * 10
-            )
-        } catch (e: SecurityException) {
-            shutdown()
-            return@withContext
-        }
         audioRecorder.startRecording()
         val buf = ByteArray(BUF_SIZE)
+        var lastPush = false
         while (running) {
+            if (!isPush) {
+                if (lastPush) audioRecorder.stop()
+                lastPush = isPush
+                delay(50)
+                continue
+            } else if (!lastPush) {
+                audioRecorder.startRecording()
+            }
+            lastPush = isPush
+            Log.d("SocketHandler", "recorder loop")
             try {
                 val bytesRead = audioRecorder.read(buf, 0, BUF_SIZE)
                 if (bytesRead > 0) {
@@ -50,8 +80,6 @@ class SocketHandler(private val socket: DatagramSocket, private val to: InetSock
                 // TODO: Implement exception handling
                 Log.e("SocketHandler", "recorder", ex)
                 shutdown()
-            } finally {
-
             }
         }
         audioRecorder.stop()
@@ -59,26 +87,19 @@ class SocketHandler(private val socket: DatagramSocket, private val to: InetSock
     }
 
     private suspend fun player() = withContext(Dispatchers.IO) {
-        val track = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
-            )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(SAMPLE_RATE)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build()
-            )
-            .setBufferSizeInBytes(BUF_SIZE)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
-        track.play()
         val buf = ByteArray(BUF_SIZE)
+        var lastPush = true
         while (running) {
+            if (isPush) {
+                if (!lastPush) track.stop()
+                lastPush = isPush
+                delay(50)
+                continue
+            } else if (lastPush) {
+                track.play()
+            }
+            lastPush = isPush
+            Log.d("SocketHandler", "player loop")
             try {
                 val packet = DatagramPacket(buf, BUF_SIZE)
                 socket.receive(packet)
@@ -88,8 +109,6 @@ class SocketHandler(private val socket: DatagramSocket, private val to: InetSock
                 // TODO: Implement exception handling
                 Log.e("SocketHandler", "player", ex)
                 shutdown()
-            } finally {
-
             }
         }
         track.stop()

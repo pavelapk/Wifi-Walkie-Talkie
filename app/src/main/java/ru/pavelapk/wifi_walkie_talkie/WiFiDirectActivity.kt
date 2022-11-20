@@ -14,6 +14,8 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
+import android.view.MotionEvent
+import android.view.View.OnTouchListener
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
@@ -108,6 +110,20 @@ class WiFiDirectActivity : AppCompatActivity(), WifiP2pManager.ChannelListener {
         binding.btnCloseConnection.setOnClickListener {
             cancelDisconnect()
         }
+
+        binding.btnPush.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    binding.btnPush.setImageResource(android.R.drawable.btn_star_big_on)
+                    socketHandler?.isPush = true
+                }
+                MotionEvent.ACTION_UP -> {
+                    binding.btnPush.setImageResource(android.R.drawable.btn_star_big_off)
+                    socketHandler?.isPush = false
+                }
+            }
+            return@setOnTouchListener true
+        }
     }
 
     override fun onResume() {
@@ -141,13 +157,18 @@ class WiFiDirectActivity : AppCompatActivity(), WifiP2pManager.ChannelListener {
 
     fun goToStart() {
         updatePeerList(listOf())
+        connectionJob?.cancel()
+        connectionJob = null
+        socketHandler = null
         binding.tvConnected.isVisible = false
+        binding.btnPush.isVisible = false
         binding.recyclerPeers.isVisible = true
     }
 
     private fun connected(address: String) {
         binding.tvConnected.isVisible = true
         binding.tvConnected.text = "connected to: $address"
+        binding.btnPush.isVisible = true
         binding.recyclerPeers.isVisible = false
     }
 
@@ -185,6 +206,7 @@ class WiFiDirectActivity : AppCompatActivity(), WifiP2pManager.ChannelListener {
     }
 
     private var connectionJob: Job? = null
+    private var socketHandler: SocketHandler? = null
 
     fun startServer() {
         lifecycleScope.launch(Dispatchers.IO) {
@@ -200,19 +222,16 @@ class WiFiDirectActivity : AppCompatActivity(), WifiP2pManager.ChannelListener {
                     connected(client.toString())
                 }
                 connectionJob = launch {
-                    SocketHandler(server, client).run {
-                        toast(it)
+                    socketHandler = SocketHandler(server, client)
+                    socketHandler?.run()
+                    withContext(Dispatchers.Main) {
+                        goToStart()
                     }
-                    coroutineContext.cancelChildren()
                 }
             } catch (e: IOException) {
                 Log.e(TAG, "server socket error", e)
                 withContext(Dispatchers.Main) {
                     toastLong("Ошибка при создании подключения")
-                }
-            } finally {
-                withContext(Dispatchers.Main) {
-                    goToStart()
                 }
             }
         }
@@ -241,19 +260,16 @@ class WiFiDirectActivity : AppCompatActivity(), WifiP2pManager.ChannelListener {
                     connected(server.toString())
                 }
                 connectionJob = launch {
-                    SocketHandler(client, server).run {
-                        toast(it)
+                    socketHandler = SocketHandler(client, server)
+                    socketHandler?.run()
+                    withContext(Dispatchers.Main) {
+                        goToStart()
                     }
-                    coroutineContext.cancelChildren()
                 }
             } catch (e: IOException) {
                 Log.e(TAG, "client socket error", e)
                 withContext(Dispatchers.Main) {
                     toastLong("Ошибка при подключении")
-                }
-            } finally {
-                withContext(Dispatchers.Main) {
-                    goToStart()
                 }
             }
         }
